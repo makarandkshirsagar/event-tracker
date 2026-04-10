@@ -170,8 +170,6 @@ export default function App() {
 
   const [editMemberId,   setEditMemberId]   = useState(null);
   const [editMemberForm, setEditMemberForm] = useState({name:"",email:""});
-  const [aiReport,   setAiReport]   = useState("");
-  const [aiLoading,  setAiLoading]  = useState(false);
   const [loading,    setLoading]    = useState(false);
   const [toast,      setToast]      = useState({msg:"",type:"success"});
   const [saving,     setSaving]     = useState(false);
@@ -562,31 +560,6 @@ export default function App() {
   };
 
   // ── GENERATE AI REPORT ──
-  const genAI = async () => {
-    setAiLoading(true); setAiReport(""); setView("ai");
-    const rows = tasks.map(t=>`Member:${t.member}|Division:${t.division}|Task:${t.title}|Status:${t.status}|Progress:${t.progress}%|Blocker:${t.blocker||"None"}`).join("\n");
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/generate-report`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${SUPABASE_KEY}` },
-        body: JSON.stringify({ rows, projectName: project }),
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "Edge function error");
-      const reportText = d.text || "No response.";
-      setAiReport(reportText);
-      await db.insertReport({
-        report_date: new Date().toISOString().split("T")[0],
-        report_text: reportText, project_name: project,
-        divisions_covered: [...new Set(tasks.map(t=>t.division))],
-        event_id: eventId,
-      });
-      showToast("Report saved ✅");
-    } catch {
-      setAiReport("Error generating report. Please try again.");
-    }
-    setAiLoading(false);
-  };
 
   const filtered = useMemo(()=>tasks.filter(t=>
     (isMember ? t.member === currentUser.full_name : true)&&
@@ -611,7 +584,7 @@ export default function App() {
       avg:mt.length?Math.round(mt.reduce((a,t)=>a+t.progress,0)/mt.length):0};
   }),[tasks,members]);
 
-  const navItems = [["dashboard","📊 Dashboard"],["tasks","📋 Tasks"],["team","👥 Team"],["ai","🤖 AI Report"],
+  const navItems = [["dashboard","📊 Dashboard"],["tasks","📋 Tasks"],["team","👥 Team"],
     ...(isAdmin?[["divisions","⚙️ Divisions"],["users","👤 Users"]]:[])];
   const page   = {minHeight:"100vh",background:"#f8f9fb",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1f2937",fontSize:14};
   const header = {background:"#312e81",color:"#fff",padding:"12px 20px"};
@@ -881,9 +854,6 @@ export default function App() {
               </tbody>
             </table>
           </Card>
-          <button onClick={genAI} style={{width:"100%",background:"#4f46e5",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer",marginTop:8}}>
-            🤖 Generate AI Project Report
-          </button>
         </>}
 
         {/* ── TASKS ── */}
@@ -1041,30 +1011,6 @@ export default function App() {
         </>}
 
         {/* ── AI REPORT ── */}
-        {view==="ai" && eventId && (
-          <Card>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div style={{fontWeight:600,fontSize:14}}>🤖 AI Project Report</div>
-              <Btn small onClick={genAI} disabled={aiLoading}>{aiLoading?"Generating…":"Regenerate"}</Btn>
-            </div>
-            {aiLoading&&(
-              <div style={{textAlign:"center",padding:"48px 0"}}>
-                <div style={{fontSize:36,marginBottom:10}}>🤖</div>
-                <div style={{fontSize:13,color:"#9ca3af"}}>Analysing all tasks and members…</div>
-              </div>
-            )}
-            {aiReport&&!aiLoading&&(
-              <div style={{fontSize:13,lineHeight:1.8,color:"#374151",whiteSpace:"pre-wrap"}}>{aiReport}</div>
-            )}
-            {!aiReport&&!aiLoading&&(
-              <div style={{textAlign:"center",padding:"48px 0"}}>
-                <div style={{fontSize:36,marginBottom:10}}>📊</div>
-                <div style={{fontSize:13,color:"#9ca3af",marginBottom:16}}>Generate an intelligent report across all {tasks.length} tasks and {members.length} members</div>
-                <Btn onClick={genAI}>Generate Report</Btn>
-              </div>
-            )}
-          </Card>
-        )}
 
         {/* ── DIVISIONS (admin only) ── */}
         {view==="divisions" && isAdmin && <>
