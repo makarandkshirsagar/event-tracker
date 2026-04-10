@@ -1,10 +1,8 @@
 import { useState, useMemo, useEffect } from "react";
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────
-// Replace these two values with your actual Supabase project credentials
 const SUPABASE_URL = "https://zxrajiaadapdogjvvxxz.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp4cmFqaWFhZGFwZG9nanZ2eHh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDk1NTAsImV4cCI6MjA5MTIyNTU1MH0.SxBDO1l-9tHQ1vt1frH3qdfj6jz3c8ODByrTCSQaBvo";
-const ADMIN_PASSWORD = "admin123"; // Change this to a secure password
 
 const sb = async (path, opts = {}) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -38,6 +36,7 @@ const db = {
   // Members
   getMembers:  (eid)        => sb(`team_members?event_id=eq.${eid}&select=*&order=created_at.asc`),
   insertMember:(m, eid, email) => sb("team_members", { method: "POST", body: JSON.stringify({ name: m, event_id: eid, email: email||null }) }),
+  updateMember:(id, data)   => sb(`team_members?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteMember:(id)         => sb(`team_members?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }),
   // Check-ins
   insertCI:    (c)          => sb("daily_checkins", { method: "POST", body: JSON.stringify(c) }),
@@ -48,8 +47,26 @@ const db = {
   insertDivision: (d)       => sb("divisions", { method: "POST", body: JSON.stringify(d) }),
   updateDivision: (id, d)   => sb(`divisions?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteDivision: (id)      => sb(`divisions?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }),
+  // App Users
+  getAppUsers:    ()        => sb("app_users?select=*&order=created_at.asc"),
+  getUserByUsername: (u)    => sb(`app_users?username=eq.${encodeURIComponent(u)}&select=*`),
+  getUserByEmail: (e)       => sb(`app_users?email=eq.${encodeURIComponent(e)}&select=*`),
+  insertAppUser: (u)        => sb("app_users", { method: "POST", body: JSON.stringify(u) }),
+  updateAppUser: (id, data) => sb(`app_users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  getPendingUsers:    ()    => sb("app_users?status=eq.pending&select=*&order=created_at.asc"),
+  getApprovedUsers:   ()    => sb("app_users?status=eq.approved&select=*&order=full_name.asc"),
+  getAdminCount:      ()    => sb("app_users?role=eq.admin&status=eq.approved&select=id"),
 };
 // ────────────────────────────────────────────────────────────────
+
+// Simple password hashing using Web Crypto API
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + "evt_salt_2025");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
 
 const PRIORITIES = ["Low","Medium","High","Critical"];
 const STATUSES   = ["Not Started","In Progress","On Track","At Risk","Blocked","Completed"];
@@ -75,14 +92,15 @@ const Btn = ({children,onClick,variant="primary",small,disabled,style={}}) => {
     danger: {background:"#fee2e2",color:"#dc2626",padding:"4px 10px",fontSize:11},
     success:{background:"#dcfce7",color:"#16a34a",padding:"4px 10px",fontSize:11},
     info:   {background:"#eff6ff",color:"#2563eb",padding:"4px 10px",fontSize:11},
+    warning:{background:"#fffbeb",color:"#92400e",padding:"4px 10px",fontSize:11},
   };
   return <button onClick={disabled?null:onClick} style={{...base,...v[variant]}}>{children}</button>;
 };
 
-const Input = ({label,value,onChange,placeholder,type="text"}) => (
+const Input = ({label,value,onChange,placeholder,type="text",onKeyDown}) => (
   <div style={{marginBottom:12}}>
     {label&&<div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>}
-    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} onKeyDown={onKeyDown}
       style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff"}}/>
   </div>
 );
@@ -116,19 +134,31 @@ const Toast = ({msg,type}) => msg ? (
   </div>
 ) : null;
 
+const AuthCard = ({children, subtitle}) => (
+  <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8f9fb"}}>
+    <div style={{width:400,background:"#fff",borderRadius:18,padding:36,boxShadow:"0 8px 32px rgba(0,0,0,.1)"}}>
+      <div style={{textAlign:"center",marginBottom:28}}>
+        <div style={{fontSize:36,marginBottom:8}}>🎪</div>
+        <div style={{fontSize:20,fontWeight:700}}>Event Tracker</div>
+        <div style={{fontSize:13,color:"#6b7280",marginTop:4}}>{subtitle}</div>
+      </div>
+      {children}
+    </div>
+  </div>
+);
+
 const blankTask = () => ({title:"",member:"",division:"",priority:"Medium",due:"",notes:""});
 const blankCI   = t  => ({status:t.status,progress:t.progress,blocker:t.blocker||"",notes:t.notes||""});
 
-// ── DB NOT CONFIGURED CHECK ──
-const isConfigured = SUPABASE_URL !== "YOUR_SUPABASE_URL";
-
 export default function App() {
+  // ── CORE STATE ──
   const [view,       setView]       = useState("dashboard");
   const [events,     setEvents]     = useState([]);
   const [eventId,    setEventId]    = useState(null);
   const [newEvent,   setNewEvent]   = useState("");
   const [tasks,      setTasks]      = useState([]);
   const [members,    setMembers]    = useState([]);
+  const [memberRows, setMemberRows] = useState([]);
   const [fDiv,       setFDiv]       = useState("All");
   const [fMember,    setFMember]    = useState("All");
   const [fStatus,    setFStatus]    = useState("All");
@@ -137,47 +167,78 @@ export default function App() {
   const [taskForm,   setTaskForm]   = useState(blankTask());
   const [ciTask,     setCiTask]     = useState(null);
   const [ciForm,     setCiForm]     = useState({});
-  const [newMember,  setNewMember]  = useState("");
+
+  const [editMemberId,   setEditMemberId]   = useState(null);
+  const [editMemberForm, setEditMemberForm] = useState({name:"",email:""});
   const [aiReport,   setAiReport]   = useState("");
   const [aiLoading,  setAiLoading]  = useState(false);
   const [loading,    setLoading]    = useState(false);
   const [toast,      setToast]      = useState({msg:"",type:"success"});
   const [saving,     setSaving]     = useState(false);
-  const [currentUser,setCurrentUser] = useState(()=>{ try{ return JSON.parse(sessionStorage.getItem("evtUser"))||null; }catch{ return null; } });
-  const [loginTab,   setLoginTab]   = useState("admin");
-  const [adminPass,  setAdminPass]  = useState("");
-  const [memberInput,setMemberInput] = useState("");
-  const [memberEmail,setMemberEmail] = useState("");
   const [sending,    setSending]    = useState(false);
   const [divisions,  setDivisions]  = useState([]);
   const [divForm,    setDivForm]    = useState({name:"",icon:"📁"});
   const [editDivId,  setEditDivId]  = useState(null);
 
+  // ── AUTH STATE ──
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("evtUser")) || null; } catch { return null; }
+  });
+  // authScreen: "login" | "register" | "pending" | "setup"
+  const [authScreen, setAuthScreen] = useState("login");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [loginForm, setLoginForm]   = useState({username:"", password:""});
+  const [regForm,   setRegForm]     = useState({username:"", full_name:"", email:"", password:"", confirm:""});
+  const [setupForm, setSetupForm]   = useState({username:"", full_name:"", email:"", password:"", confirm:""});
+
+  // ── ADMIN USER MANAGEMENT ──
+  const [appUsers,      setAppUsers]      = useState([]);
+  const [approvedUsers, setApprovedUsers] = useState([]);
+  const [pendingUsers,  setPendingUsers]  = useState([]);
+  const [usersView,     setUsersView]     = useState("pending"); // "pending" | "all"
+  const [selectedUserId, setSelectedUserId] = useState("");
+
   const showToast = (msg, type="success") => {
     setToast({msg,type});
-    setTimeout(()=>setToast({msg:"",type:"success"}), 3000);
+    setTimeout(()=>setToast({msg:"",type:"success"}), 3500);
   };
+
+  const isAdmin  = currentUser?.role === "admin";
+  const isMember = currentUser?.role === "member";
+
+  // ── INITIAL SETUP CHECK: does any admin exist? ──
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const admins = await db.getAdminCount();
+        if (admins.length === 0) setAuthScreen("setup");
+      } catch {
+        // table may not exist yet; show normal login
+      }
+    };
+    if (!currentUser) check();
+  }, [currentUser]);
 
   // ── LOAD EVENTS + DIVISIONS ──
   useEffect(() => {
-    if (!isConfigured) return;
+    if (!currentUser) return;
     const load = async () => {
       setLoading(true);
       try {
         const [evts, divs] = await Promise.all([db.getEvents(), db.getDivisions()]);
         setEvents(evts);
         setDivisions(divs);
-      } catch(e) {
+      } catch {
         showToast("Failed to load data. Check your credentials.", "error");
       }
       setLoading(false);
     };
     load();
-  }, []);
+  }, [currentUser]);
 
   // ── LOAD TASKS + MEMBERS WHEN EVENT SELECTED ──
   useEffect(() => {
-    if (!isConfigured || !eventId) return;
+    if (!eventId) return;
     const load = async () => {
       setLoading(true);
       try {
@@ -185,7 +246,7 @@ export default function App() {
         setTasks(t.map(r=>({...r, progress: r.progress||0, blocker: r.blocker||"", notes: r.notes||""})));
         setMembers(m.map(r=>r.name));
         setMemberRows(m);
-      } catch(e) {
+      } catch {
         showToast("Failed to load data from Supabase.", "error");
       }
       setLoading(false);
@@ -193,24 +254,138 @@ export default function App() {
     load();
   }, [eventId]);
 
-  const [memberRows, setMemberRows] = useState([]);
+  // ── LOAD PENDING USERS (admin) ──
+  useEffect(() => {
+    if (!isAdmin) return;
+    db.getPendingUsers().then(setPendingUsers).catch(()=>{});
+    db.getAppUsers().then(setAppUsers).catch(()=>{});
+    db.getApprovedUsers().then(setApprovedUsers).catch(()=>{});
+  }, [isAdmin]);
 
   const project = events.find(e => e.id === eventId)?.name || "Event Tracker";
-  const isAdmin  = currentUser?.role === "admin";
-  const isMember = currentUser?.role === "member";
 
-  // ── AUTH ──
-  const login = (role, name = null) => {
-    const user = { role, name };
-    setCurrentUser(user);
-    sessionStorage.setItem("evtUser", JSON.stringify(user));
+  // ── FIRST-TIME SETUP: create the first admin ──
+  const handleSetup = async () => {
+    const { username, full_name, email, password, confirm } = setupForm;
+    if (!username.trim() || !full_name.trim() || !email.trim() || !password) {
+      showToast("All fields are required.", "error"); return;
+    }
+    if (password !== confirm) { showToast("Passwords do not match.", "error"); return; }
+    if (password.length < 6) { showToast("Password must be at least 6 characters.", "error"); return; }
+    setAuthLoading(true);
+    try {
+      const password_hash = await hashPassword(password);
+      const [row] = await db.insertAppUser({
+        username: username.trim().toLowerCase(),
+        full_name: full_name.trim(),
+        email: email.trim().toLowerCase(),
+        password_hash,
+        role: "admin",
+        status: "approved",
+      });
+      const user = { id: row.id, username: row.username, full_name: row.full_name, email: row.email, role: "admin" };
+      setCurrentUser(user);
+      sessionStorage.setItem("evtUser", JSON.stringify(user));
+      showToast("Admin account created. Welcome!");
+    } catch(e) {
+      showToast("Failed to create admin account: " + e.message, "error");
+    }
+    setAuthLoading(false);
   };
 
+  // ── LOGIN ──
+  const handleLogin = async () => {
+    const { username, password } = loginForm;
+    if (!username.trim() || !password) { showToast("Enter username and password.", "error"); return; }
+    setAuthLoading(true);
+    try {
+      const rows = await db.getUserByUsername(username.trim().toLowerCase());
+      if (!rows.length) { showToast("Username not found.", "error"); setAuthLoading(false); return; }
+      const row = rows[0];
+      if (row.status === "pending") {
+        setAuthScreen("pending");
+        setAuthLoading(false);
+        return;
+      }
+      if (row.status === "rejected") {
+        showToast("Your registration was not approved. Contact admin.", "error");
+        setAuthLoading(false);
+        return;
+      }
+      const hash = await hashPassword(password);
+      if (hash !== row.password_hash) {
+        showToast("Incorrect password.", "error");
+        setAuthLoading(false);
+        return;
+      }
+      const user = { id: row.id, username: row.username, full_name: row.full_name, email: row.email, role: row.role };
+      setCurrentUser(user);
+      sessionStorage.setItem("evtUser", JSON.stringify(user));
+    } catch(e) {
+      showToast("Login failed: " + e.message, "error");
+    }
+    setAuthLoading(false);
+  };
+
+  // ── REGISTER ──
+  const handleRegister = async () => {
+    const { username, full_name, email, password, confirm } = regForm;
+    if (!username.trim() || !full_name.trim() || !email.trim() || !password) {
+      showToast("All fields are required.", "error"); return;
+    }
+    if (password !== confirm) { showToast("Passwords do not match.", "error"); return; }
+    if (password.length < 6) { showToast("Password must be at least 6 characters.", "error"); return; }
+    setAuthLoading(true);
+    try {
+      // Check username uniqueness
+      const existing = await db.getUserByUsername(username.trim().toLowerCase());
+      if (existing.length) { showToast("Username already taken.", "error"); setAuthLoading(false); return; }
+      const existingEmail = await db.getUserByEmail(email.trim().toLowerCase());
+      if (existingEmail.length) { showToast("Email already registered.", "error"); setAuthLoading(false); return; }
+      const password_hash = await hashPassword(password);
+      await db.insertAppUser({
+        username: username.trim().toLowerCase(),
+        full_name: full_name.trim(),
+        email: email.trim().toLowerCase(),
+        password_hash,
+        role: "member",
+        status: "pending",
+      });
+      setAuthScreen("pending");
+    } catch(e) {
+      showToast("Registration failed: " + e.message, "error");
+    }
+    setAuthLoading(false);
+  };
+
+  // ── LOGOUT ──
   const logout = () => {
     setCurrentUser(null);
     setEventId(null);
     setTasks([]); setMembers([]); setMemberRows([]);
+    setEvents([]); setDivisions([]);
+    setAuthScreen("login");
+    setLoginForm({username:"", password:""});
     sessionStorage.removeItem("evtUser");
+  };
+
+  // ── ADMIN: APPROVE / REJECT USER ──
+  const approveUser = async (id) => {
+    try {
+      await db.updateAppUser(id, { status: "approved" });
+      setPendingUsers(u => u.filter(x => x.id !== id));
+      setAppUsers(u => u.map(x => x.id === id ? {...x, status:"approved"} : x));
+      setApprovedUsers(u => { const found = appUsers.find(x=>x.id===id); return found ? [...u, {...found, status:"approved"}] : u; });
+      showToast("User approved ✅");
+    } catch { showToast("Failed to approve user.", "error"); }
+  };
+  const rejectUser = async (id) => {
+    try {
+      await db.updateAppUser(id, { status: "rejected" });
+      setPendingUsers(u => u.filter(x => x.id !== id));
+      setAppUsers(u => u.map(x => x.id === id ? {...x, status:"rejected"} : x));
+      showToast("User rejected", "warning");
+    } catch { showToast("Failed to reject user.", "error"); }
   };
 
   // ── SEND REMINDERS ──
@@ -239,17 +414,11 @@ export default function App() {
     const name = newEvent.trim();
     if (!name) return;
     try {
-      if (isConfigured) {
-        const [row] = await db.insertEvent(name);
-        setEvents(evts => [...evts, row]);
-        setEventId(row.id);
-      } else {
-        const fake = { id: Date.now(), name, created_at: new Date().toISOString() };
-        setEvents(evts => [...evts, fake]);
-        setEventId(fake.id);
-      }
+      const [row] = await db.insertEvent(name);
+      setEvents(evts => [...evts, row]);
+      setEventId(row.id);
       setNewEvent("");
-    } catch(e) {
+    } catch {
       showToast("Failed to create event.", "error");
     }
   };
@@ -265,137 +434,134 @@ export default function App() {
     if (!divForm.name.trim()) return;
     try {
       if (editDivId) {
-        if (isConfigured) await db.updateDivision(editDivId, divForm);
+        await db.updateDivision(editDivId, divForm);
         setDivisions(ds => ds.map(d => d.id === editDivId ? {...d, ...divForm} : d));
         showToast("Division updated ✅");
       } else {
         const sort_order = divisions.length + 1;
-        if (isConfigured) {
-          const [row] = await db.insertDivision({...divForm, sort_order});
-          setDivisions(ds => [...ds, row]);
-        } else {
-          setDivisions(ds => [...ds, {id: Date.now(), ...divForm, sort_order}]);
-        }
+        const [row] = await db.insertDivision({...divForm, sort_order});
+        setDivisions(ds => [...ds, row]);
         showToast("Division added ✅");
       }
       setDivForm({name:"", icon:"📁"}); setEditDivId(null);
-    } catch(e) { showToast("Failed to save division.", "error"); }
+    } catch { showToast("Failed to save division.", "error"); }
   };
 
   const deleteDivision = async (id) => {
     try {
-      if (isConfigured) await db.deleteDivision(id);
+      await db.deleteDivision(id);
       setDivisions(ds => ds.filter(d => d.id !== id));
       showToast("Division deleted", "warning");
-    } catch(e) { showToast("Failed to delete division.", "error"); }
+    } catch { showToast("Failed to delete division.", "error"); }
   };
 
   const removeEvent = async (id) => {
     try {
-      if (isConfigured) await db.deleteEvent(id);
+      await db.deleteEvent(id);
       setEvents(evts => evts.filter(e => e.id !== id));
       if (eventId === id) setEventId(null);
       showToast("Event deleted", "warning");
-    } catch(e) {
-      showToast("Failed to delete event.", "error");
-    }
+    } catch { showToast("Failed to delete event.", "error"); }
   };
 
   const tf = (k,v) => setTaskForm(f=>({...f,[k]:v}));
   const cf = (k,v) => setCiForm(f=>({...f,[k]:v}));
 
-  const openAdd  = () => { setEditId(null); setTaskForm({...blankTask(), member: isMember ? currentUser.name : ""}); setTaskPanel(true); };
+  const openAdd  = () => { setEditId(null); setTaskForm({...blankTask(), member: isMember ? currentUser.full_name : ""}); setTaskPanel(true); };
   const openEdit = t  => { setEditId(t.id); setTaskForm({title:t.title,member:t.member,division:t.division,priority:t.priority,due:t.due,notes:t.notes}); setTaskPanel(true); };
   const openCI   = t  => { setCiTask(t); setCiForm(blankCI(t)); };
 
-  // ── SAVE TASK (Create / Update) ──
+  // ── SAVE TASK ──
   const saveTask = async () => {
     if (!taskForm.title||!taskForm.member||!taskForm.division) return;
     setSaving(true);
     try {
       if (editId) {
-        if (isConfigured) await db.updateTask(editId, taskForm);
+        await db.updateTask(editId, taskForm);
         setTasks(ts=>ts.map(t=>t.id===editId?{...t,...taskForm}:t));
         showToast("Task updated ✅");
       } else {
         const newTask = {...taskForm, status:"Not Started", progress:0, blocker:"", event_id: eventId};
-        if (isConfigured) {
-          const [saved] = await db.insertTask(newTask);
-          setTasks(ts=>[...ts, saved]);
-        } else {
-          setTasks(ts=>[...ts,{id:Date.now(),...newTask}]);
-        }
+        const [saved] = await db.insertTask(newTask);
+        setTasks(ts=>[...ts, saved]);
         showToast("Task created ✅");
       }
       setTaskPanel(false);
-    } catch(e) {
+    } catch {
       showToast("Failed to save task. Check Supabase.", "error");
     }
     setSaving(false);
   };
 
-  // ── SAVE CHECK-IN (Update task + log check-in row) ──
+  // ── SAVE CHECK-IN ──
   const saveCI = async () => {
     setSaving(true);
     try {
-      if (isConfigured) {
-        await db.updateTask(ciTask.id, {
-          status: ciForm.status,
-          progress: ciForm.progress,
-          blocker: ciForm.blocker,
-          notes: ciForm.notes,
-        });
-        await db.insertCI({
-          task_id: ciTask.id,
-          member_name: ciTask.member,
-          division: ciTask.division,
-          status: ciForm.status,
-          progress: ciForm.progress,
-          blocker: ciForm.blocker,
-          notes: ciForm.notes,
-          checkin_date: new Date().toISOString().split("T")[0],
-          event_id: eventId,
-        });
-      }
+      await db.updateTask(ciTask.id, {
+        status: ciForm.status, progress: ciForm.progress,
+        blocker: ciForm.blocker, notes: ciForm.notes,
+      });
+      await db.insertCI({
+        task_id: ciTask.id, member_name: ciTask.member, division: ciTask.division,
+        status: ciForm.status, progress: ciForm.progress,
+        blocker: ciForm.blocker, notes: ciForm.notes,
+        checkin_date: new Date().toISOString().split("T")[0], event_id: eventId,
+      });
       setTasks(ts=>ts.map(t=>t.id===ciTask.id?{...t,...ciForm}:t));
-      showToast("Check-in saved to database ✅");
+      showToast("Check-in saved ✅");
       setCiTask(null);
-    } catch(e) {
-      showToast("Failed to save check-in.", "error");
-    }
+    } catch { showToast("Failed to save check-in.", "error"); }
     setSaving(false);
   };
 
   // ── DELETE TASK ──
   const delTask = async (id) => {
     try {
-      if (isConfigured) await db.deleteTask(id);
+      await db.deleteTask(id);
       setTasks(ts=>ts.filter(t=>t.id!==id));
       showToast("Task deleted", "warning");
-    } catch(e) {
-      showToast("Failed to delete task.", "error");
-    }
+    } catch { showToast("Failed to delete task.", "error"); }
   };
 
-  // ── ADD MEMBER ──
+  // ── ADD MEMBER (from approved app_users) ──
   const addMember = async () => {
-    const name  = newMember.trim();
-    const email = memberEmail.trim() || null;
-    if (!name || members.includes(name)) return;
-    try {
-      if (isConfigured) {
-        const [row] = await db.insertMember(name, eventId, email);
-        setMemberRows(r=>[...r, row]);
-      }
-      setMembers(m=>[...m, name]);
-      setNewMember(""); setMemberEmail("");
-      showToast("Member added ✅");
-    } catch(e) {
-      showToast("Failed to add member.", "error");
+    if (!selectedUserId) return;
+    const user = approvedUsers.find(u => u.id === selectedUserId);
+    if (!user) return;
+    if (memberRows.some(m => m.app_user_id === user.id || m.name === user.full_name)) {
+      showToast("This user is already in the team.", "warning"); return;
     }
+    try {
+      const [row] = await db.insertMember(user.full_name, eventId, user.email);
+      setMemberRows(r => [...r, {...row, app_user_id: user.id}]);
+      setMembers(m => [...m, user.full_name]);
+      setSelectedUserId("");
+      showToast("Member added ✅");
+    } catch { showToast("Failed to add member.", "error"); }
   };
 
-  // ── GENERATE AI REPORT (+ save to DB) ──
+  // ── EDIT MEMBER ──
+  const openEditMember = (row) => {
+    setEditMemberId(row.id);
+    setEditMemberForm({ name: row.name, email: row.email || "" });
+  };
+  const saveEditMember = async () => {
+    const name  = editMemberForm.name.trim();
+    const email = editMemberForm.email.trim() || null;
+    if (!name) return;
+    try {
+      await db.updateMember(editMemberId, { name, email });
+      setMemberRows(r => r.map(m => m.id === editMemberId ? {...m, name, email} : m));
+      setMembers(ms => ms.map(m => {
+        const old = memberRows.find(r => r.id === editMemberId);
+        return m === old?.name ? name : m;
+      }));
+      setEditMemberId(null);
+      showToast("Member updated ✅");
+    } catch { showToast("Failed to update member.", "error"); }
+  };
+
+  // ── GENERATE AI REPORT ──
   const genAI = async () => {
     setAiLoading(true); setAiReport(""); setView("ai");
     const rows = tasks.map(t=>`Member:${t.member}|Division:${t.division}|Task:${t.title}|Status:${t.status}|Progress:${t.progress}%|Blocker:${t.blocker||"None"}`).join("\n");
@@ -409,18 +575,13 @@ export default function App() {
       if (!res.ok) throw new Error(d.error || "Edge function error");
       const reportText = d.text || "No response.";
       setAiReport(reportText);
-
-      // Save report to Supabase
-      if (isConfigured) {
-        await db.insertReport({
-          report_date: new Date().toISOString().split("T")[0],
-          report_text: reportText,
-          project_name: project,
-          divisions_covered: [...new Set(tasks.map(t=>t.division))],
-          event_id: eventId,
-        });
-        showToast("Report saved to database ✅");
-      }
+      await db.insertReport({
+        report_date: new Date().toISOString().split("T")[0],
+        report_text: reportText, project_name: project,
+        divisions_covered: [...new Set(tasks.map(t=>t.division))],
+        event_id: eventId,
+      });
+      showToast("Report saved ✅");
     } catch {
       setAiReport("Error generating report. Please try again.");
     }
@@ -428,7 +589,7 @@ export default function App() {
   };
 
   const filtered = useMemo(()=>tasks.filter(t=>
-    (isMember ? t.member === currentUser.name : true)&&
+    (isMember ? t.member === currentUser.full_name : true)&&
     (fDiv==="All"||t.division===fDiv)&&
     (fMember==="All"||t.member===fMember)&&
     (fStatus==="All"||t.status===fStatus)
@@ -450,12 +611,14 @@ export default function App() {
       avg:mt.length?Math.round(mt.reduce((a,t)=>a+t.progress,0)/mt.length):0};
   }),[tasks,members]);
 
-  const navItems = [["dashboard","📊 Dashboard"],["tasks","📋 Tasks"],["team","👥 Team"],["ai","🤖 AI Report"],...(isAdmin?[["divisions","⚙️ Divisions"]]:[]) ];
+  const navItems = [["dashboard","📊 Dashboard"],["tasks","📋 Tasks"],["team","👥 Team"],["ai","🤖 AI Report"],
+    ...(isAdmin?[["divisions","⚙️ Divisions"],["users","👤 Users"]]:[])];
   const page   = {minHeight:"100vh",background:"#f8f9fb",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1f2937",fontSize:14};
   const header = {background:"#312e81",color:"#fff",padding:"12px 20px"};
   const nav    = {background:"#fff",borderBottom:"1px solid #e5e7eb",padding:"0 20px",display:"flex"};
   const body   = {maxWidth:860,margin:"0 auto",padding:"20px 16px"};
 
+  // ── INLINE CI FORM ──
   const CIForm = () => ciTask && (
     <Card style={{border:"2px solid #22c55e",marginBottom:16}}>
       <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Update: {ciTask.title}</div>
@@ -478,62 +641,84 @@ export default function App() {
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
         {saving && <span style={{fontSize:11,color:"#9ca3af"}}>Saving…</span>}
         <Btn variant="ghost" onClick={()=>setCiTask(null)}>Cancel</Btn>
-        <Btn variant="success" onClick={saveCI} disabled={saving}>
-          {isConfigured ? "💾 Save to Database" : "Save Update"}
-        </Btn>
+        <Btn variant="success" onClick={saveCI} disabled={saving}>💾 Save to Database</Btn>
       </div>
     </Card>
   );
 
+
+  // ─────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────
   return (
     <div style={page}>
       <Toast {...toast}/>
 
-      {/* ── LOGIN SCREEN ── */}
-      {!currentUser && (
-        <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8f9fb"}}>
-          <div style={{width:360,background:"#fff",borderRadius:18,padding:32,boxShadow:"0 8px 32px rgba(0,0,0,.1)"}}>
-            <div style={{textAlign:"center",marginBottom:24}}>
-              <div style={{fontSize:36,marginBottom:8}}>🎪</div>
-              <div style={{fontSize:20,fontWeight:700}}>Event Tracker</div>
-              <div style={{fontSize:13,color:"#6b7280",marginTop:4}}>Sign in to continue</div>
-            </div>
-            <div style={{display:"flex",borderRadius:10,overflow:"hidden",border:"1px solid #e5e7eb",marginBottom:20}}>
-              {["admin","member"].map(t=>(
-                <button key={t} onClick={()=>setLoginTab(t)} style={{flex:1,padding:"8px 0",fontSize:13,fontWeight:500,border:"none",cursor:"pointer",
-                  background:loginTab===t?"#4f46e5":"#fff",color:loginTab===t?"#fff":"#6b7280"}}>
-                  {t==="admin"?"Admin":"Team Member"}
-                </button>
-              ))}
-            </div>
-            {loginTab==="admin" ? (
-              <>
-                <div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Password</div>
-                <input type="password" value={adminPass} onChange={e=>setAdminPass(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&adminPass===ADMIN_PASSWORD&&login("admin")}
-                  placeholder="Enter admin password..."
-                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:12}}/>
-                <Btn style={{width:"100%"}} onClick={()=>{ if(adminPass===ADMIN_PASSWORD) login("admin"); else showToast("Incorrect password","error"); }}>
-                  Sign in as Admin
-                </Btn>
-              </>
-            ) : (
-              <>
-                <div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Your Name</div>
-                <input value={memberInput} onChange={e=>setMemberInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&memberInput.trim()&&login("member",memberInput.trim())}
-                  placeholder="Enter your full name..."
-                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:12}}/>
-                <Btn style={{width:"100%"}} onClick={()=>{ if(memberInput.trim()) login("member",memberInput.trim()); }}>
-                  Sign in as Member
-                </Btn>
-              </>
-            )}
+      {/* ── FIRST-TIME SETUP ── */}
+      {!currentUser && authScreen === "setup" && (
+        <AuthCard subtitle="Create your admin account to get started">
+          <Input label="Username" value={setupForm.username} onChange={v=>setSetupForm(f=>({...f,username:v}))} placeholder="admin"/>
+          <Input label="Full Name" value={setupForm.full_name} onChange={v=>setSetupForm(f=>({...f,full_name:v}))} placeholder="Your full name"/>
+          <Input label="Email" type="email" value={setupForm.email} onChange={v=>setSetupForm(f=>({...f,email:v}))} placeholder="admin@example.com"/>
+          <Input label="Password" type="password" value={setupForm.password} onChange={v=>setSetupForm(f=>({...f,password:v}))} placeholder="Min 6 characters"/>
+          <Input label="Confirm Password" type="password" value={setupForm.confirm} onChange={v=>setSetupForm(f=>({...f,confirm:v}))} placeholder="Repeat password" onKeyDown={e=>e.key==="Enter"&&handleSetup()}/>
+          <Btn style={{width:"100%"}} onClick={handleSetup} disabled={authLoading}>
+            {authLoading ? "Creating…" : "Create Admin Account"}
+          </Btn>
+          <div style={{fontSize:11,color:"#9ca3af",textAlign:"center",marginTop:10}}>
+            Make sure you have run the SQL migration in Supabase first.
           </div>
-        </div>
+        </AuthCard>
       )}
 
-      {/* ── MAIN APP (after login) ── */}
+      {/* ── LOGIN ── */}
+      {!currentUser && authScreen === "login" && (
+        <AuthCard subtitle="Sign in to continue">
+          <Input label="Username" value={loginForm.username} onChange={v=>setLoginForm(f=>({...f,username:v}))} placeholder="Your username"/>
+          <Input label="Password" type="password" value={loginForm.password} onChange={v=>setLoginForm(f=>({...f,password:v}))} placeholder="Your password" onKeyDown={e=>e.key==="Enter"&&handleLogin()}/>
+          <Btn style={{width:"100%",marginBottom:12}} onClick={handleLogin} disabled={authLoading}>
+            {authLoading ? "Signing in…" : "Sign In"}
+          </Btn>
+          <div style={{textAlign:"center",fontSize:12,color:"#6b7280"}}>
+            Don't have an account?{" "}
+            <button onClick={()=>setAuthScreen("register")} style={{background:"none",border:"none",color:"#4f46e5",fontWeight:600,cursor:"pointer",fontSize:12}}>Register</button>
+          </div>
+        </AuthCard>
+      )}
+
+      {/* ── REGISTER ── */}
+      {!currentUser && authScreen === "register" && (
+        <AuthCard subtitle="Create a new account">
+          <Input label="Username" value={regForm.username} onChange={v=>setRegForm(f=>({...f,username:v}))} placeholder="Choose a username"/>
+          <Input label="Full Name" value={regForm.full_name} onChange={v=>setRegForm(f=>({...f,full_name:v}))} placeholder="Your full name"/>
+          <Input label="Email" type="email" value={regForm.email} onChange={v=>setRegForm(f=>({...f,email:v}))} placeholder="your@email.com"/>
+          <Input label="Password" type="password" value={regForm.password} onChange={v=>setRegForm(f=>({...f,password:v}))} placeholder="Min 6 characters"/>
+          <Input label="Confirm Password" type="password" value={regForm.confirm} onChange={v=>setRegForm(f=>({...f,confirm:v}))} placeholder="Repeat password" onKeyDown={e=>e.key==="Enter"&&handleRegister()}/>
+          <Btn style={{width:"100%",marginBottom:12}} onClick={handleRegister} disabled={authLoading}>
+            {authLoading ? "Submitting…" : "Submit Registration"}
+          </Btn>
+          <div style={{textAlign:"center",fontSize:12,color:"#6b7280"}}>
+            Already registered?{" "}
+            <button onClick={()=>setAuthScreen("login")} style={{background:"none",border:"none",color:"#4f46e5",fontWeight:600,cursor:"pointer",fontSize:12}}>Sign In</button>
+          </div>
+        </AuthCard>
+      )}
+
+      {/* ── PENDING APPROVAL ── */}
+      {!currentUser && authScreen === "pending" && (
+        <AuthCard subtitle="Registration submitted">
+          <div style={{textAlign:"center",padding:"20px 0"}}>
+            <div style={{fontSize:48,marginBottom:12}}>⏳</div>
+            <div style={{fontSize:15,fontWeight:600,marginBottom:8}}>Awaiting Admin Approval</div>
+            <div style={{fontSize:13,color:"#6b7280",marginBottom:24,lineHeight:1.6}}>
+              Your registration request has been submitted. An admin will review and approve your account. You'll be able to sign in once approved.
+            </div>
+            <Btn variant="ghost" onClick={()=>setAuthScreen("login")}>Back to Sign In</Btn>
+          </div>
+        </AuthCard>
+      )}
+
+      {/* ── MAIN APP ── */}
       {currentUser && <>
 
       {/* Header */}
@@ -541,7 +726,7 @@ export default function App() {
         <div style={{maxWidth:860,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <div style={{fontSize:10,color:"#a5b4fc",letterSpacing:1,textTransform:"uppercase",marginBottom:3}}>
-              {isAdmin ? "Event Management · Admin" : `Team Member · ${currentUser.name}`}
+              {isAdmin ? "Event Management · Admin" : `Team Member · ${currentUser.full_name}`}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <div style={{color:"#fff",fontSize:17,fontWeight:700}}>{project}</div>
@@ -551,30 +736,30 @@ export default function App() {
             </div>
           </div>
           <div style={{textAlign:"right",fontSize:11,color:"#a5b4fc"}}>
-            <div style={{marginBottom:2,display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end"}}>
-              {dot(isConfigured?"#22c55e":"#f59e0b",8)}
-              <span>{isConfigured ? "Connected to Supabase" : "Local Mode (no DB)"}</span>
-            </div>
-            <div>{new Date().toDateString()}</div>
+            {isAdmin && pendingUsers.length > 0 && (
+              <div style={{marginBottom:4}}>
+                <button onClick={()=>{setView("users");setUsersView("pending");if(!eventId){}}}
+                  style={{background:"#ef4444",border:"none",borderRadius:6,color:"#fff",fontSize:10,padding:"3px 8px",cursor:"pointer",fontWeight:600}}>
+                  ⚠ {pendingUsers.length} pending approval
+                </button>
+              </div>
+            )}
+            <div style={{marginBottom:2}}>{new Date().toDateString()}</div>
             {eventId && <div style={{marginTop:2}}>{tasks.length} tasks · {members.length} members</div>}
             <button onClick={logout} style={{marginTop:4,background:"transparent",border:"1px solid #6366f1",borderRadius:6,color:"#a5b4fc",fontSize:10,padding:"2px 8px",cursor:"pointer"}}>Sign out</button>
           </div>
         </div>
       </div>
 
-      {/* Not configured banner */}
-      {!isConfigured && (
-        <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",padding:"8px 20px",textAlign:"center",fontSize:12,color:"#92400e"}}>
-          ⚠️ Running in <strong>Local Mode</strong> — Replace <code>SUPABASE_URL</code> and <code>SUPABASE_KEY</code> at the top of the code to enable database saving.
-        </div>
-      )}
-
-      {/* Nav — only shown when an event is open */}
-      {eventId && (
+      {/* Nav */}
+      {(eventId || (isAdmin && view === "users") || (isAdmin && view === "divisions")) && (
         <div style={nav}>
           {navItems.map(([v,l])=>(
             <button key={v} onClick={()=>setView(v)} style={{padding:"12px 16px",fontSize:13,fontWeight:500,border:"none",background:"transparent",cursor:"pointer",
-              borderBottom:`2px solid ${view===v?"#4f46e5":"transparent"}`,color:view===v?"#4f46e5":"#6b7280"}}>{l}</button>
+              borderBottom:`2px solid ${view===v?"#4f46e5":"transparent"}`,color:view===v?"#4f46e5":"#6b7280"}}>
+              {l}
+              {v==="users"&&pendingUsers.length>0&&<span style={{marginLeft:5,background:"#ef4444",color:"#fff",borderRadius:99,fontSize:9,padding:"1px 5px",fontWeight:700}}>{pendingUsers.length}</span>}
+            </button>
           ))}
         </div>
       )}
@@ -582,19 +767,18 @@ export default function App() {
       <div style={body}>
         {loading && (
           <div style={{textAlign:"center",padding:"60px 0",color:"#9ca3af",fontSize:13}}>
-            <div style={{fontSize:32,marginBottom:10}}>⏳</div>
-            Loading…
+            <div style={{fontSize:32,marginBottom:10}}>⏳</div>Loading…
           </div>
         )}
 
         {/* ── EVENT PICKER ── */}
-        {!loading && !eventId && <>
+        {!loading && !eventId && view !== "users" && view !== "divisions" && <>
           <div style={{textAlign:"center",padding:"40px 0 24px"}}>
             <div style={{fontSize:36,marginBottom:8}}>🎪</div>
             <div style={{fontSize:20,fontWeight:700,marginBottom:4}}>Select an Event</div>
             <div style={{fontSize:13,color:"#6b7280"}}>Choose an existing event or create a new one</div>
           </div>
-          <Card>
+          {isAdmin && <Card>
             <div style={{fontWeight:600,fontSize:13,marginBottom:10}}>Create New Event</div>
             <div style={{display:"flex",gap:8}}>
               <input value={newEvent} onChange={e=>setNewEvent(e.target.value)}
@@ -603,9 +787,9 @@ export default function App() {
                 style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none"}}/>
               <Btn onClick={createEvent}>Create</Btn>
             </div>
-          </Card>
+          </Card>}
           {events.length > 0 && <>
-            <div style={{fontSize:12,fontWeight:600,color:"#6b7280",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Your Events</div>
+            <div style={{fontSize:12,fontWeight:600,color:"#6b7280",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Events</div>
             {events.map(e=>(
               <Card key={e.id} style={{padding:"12px 16px",cursor:"pointer"}} onClick={()=>selectEvent(e.id)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -615,18 +799,24 @@ export default function App() {
                   </div>
                   <div style={{display:"flex",gap:6}}>
                     <Btn variant="primary" small onClick={ev=>{ev.stopPropagation();selectEvent(e.id);}}>Open →</Btn>
-                    <Btn variant="danger"  small onClick={ev=>{ev.stopPropagation();removeEvent(e.id);}}>Delete</Btn>
+                    {isAdmin && <Btn variant="danger" small onClick={ev=>{ev.stopPropagation();removeEvent(e.id);}}>Delete</Btn>}
                   </div>
                 </div>
               </Card>
             ))}
           </>}
+          {events.length === 0 && !loading && (
+            <div style={{textAlign:"center",color:"#9ca3af",padding:"20px 0",fontSize:13}}>
+              {isAdmin ? "No events yet. Create one above." : "No events available. Contact your admin."}
+            </div>
+          )}
         </>}
 
-        {!loading && eventId && <>
+        {/* ── MAIN VIEWS ── */}
+        {(!loading && (eventId || view === "users" || view === "divisions")) && <>
 
         {/* ── DASHBOARD ── */}
-        {view==="dashboard" && <>
+        {view==="dashboard" && eventId && <>
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
             {[["Tasks",stats.total,"#e0e7ff","#3730a3"],["✅ On Track",stats.onTrack,"#dcfce7","#15803d"],["⚠️ At Risk",stats.atRisk,"#fef9c3","#a16207"],["🚨 Blocked",stats.blocked,"#fee2e2","#b91c1c"]].map(([l,v,bg,c])=>(
               <div key={l} style={{background:bg,borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
@@ -697,7 +887,7 @@ export default function App() {
         </>}
 
         {/* ── TASKS ── */}
-        {view==="tasks" && <>
+        {view==="tasks" && eventId && <>
           <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,alignItems:"center"}}>
             {[["fDiv",fDiv,setFDiv,["All",...divisions.map(d=>d.name)]],["fMember",fMember,setFMember,["All",...members]],["fStatus",fStatus,setFStatus,["All",...STATUSES]]].map(([k,val,set,opts])=>(
               <select key={k} value={val} onChange={e=>set(e.target.value)}
@@ -717,7 +907,7 @@ export default function App() {
               <Input label="Task Title" value={taskForm.title} onChange={v=>tf("title",v)} placeholder="What needs to be done?"/>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 {isMember
-                  ? <div style={{marginBottom:12}}><div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Assigned To</div><div style={{border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,background:"#f9fafb",color:"#6b7280"}}>{currentUser.name}</div></div>
+                  ? <div style={{marginBottom:12}}><div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Assigned To</div><div style={{border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,background:"#f9fafb",color:"#6b7280"}}>{currentUser.full_name}</div></div>
                   : <Select label="Assign To" value={taskForm.member} onChange={v=>tf("member",v)} options={[{value:"",label:"Select member..."},...members.map(m=>({value:m,label:m}))]}/>
                 }
                 <Select label="Priority" value={taskForm.priority} onChange={v=>tf("priority",v)} options={PRIORITIES}/>
@@ -755,8 +945,8 @@ export default function App() {
                   </div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
-                  {(isAdmin || t.member === currentUser?.name) && <Btn variant="success" small onClick={()=>openCI(t)}>Update</Btn>}
-                  {isAdmin && <Btn variant="info"   small onClick={()=>openEdit(t)}>Edit</Btn>}
+                  {(isAdmin || t.member === currentUser?.full_name) && <Btn variant="success" small onClick={()=>openCI(t)}>Update</Btn>}
+                  {isAdmin && <Btn variant="info" small onClick={()=>openEdit(t)}>Edit</Btn>}
                   {isAdmin && <Btn variant="danger" small onClick={()=>delTask(t.id)}>Delete</Btn>}
                 </div>
               </div>
@@ -766,18 +956,21 @@ export default function App() {
         </>}
 
         {/* ── TEAM ── */}
-        {view==="team" && <>
+        {view==="team" && eventId && <>
           {isAdmin && <Card>
             <div style={{fontWeight:600,fontSize:13,marginBottom:10}}>Add Team Member</div>
             <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <input value={newMember} onChange={e=>setNewMember(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&addMember()}
-                placeholder="Full name..."
-                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none"}}/>
-              <input value={memberEmail} onChange={e=>setMemberEmail(e.target.value)}
-                placeholder="Email (optional)..."
-                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none"}}/>
-              <Btn onClick={addMember}>Add</Btn>
+              <select value={selectedUserId} onChange={e=>setSelectedUserId(e.target.value)}
+                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",background:"#fff"}}>
+                <option value="">— Select an approved user —</option>
+                {approvedUsers
+                  .filter(u => !memberRows.some(m => m.name === u.full_name))
+                  .map(u => (
+                    <option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>
+                  ))
+                }
+              </select>
+              <Btn onClick={addMember} disabled={!selectedUserId}>Add</Btn>
             </div>
             <div style={{display:"flex",justifyContent:"flex-end"}}>
               <Btn variant="info" small onClick={sendReminders} disabled={sending}>
@@ -786,37 +979,69 @@ export default function App() {
             </div>
           </Card>}
           {CIForm()}
-          {mStats.map(m=>(
-            <Card key={m.name}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div>
-                  <div style={{fontWeight:600,fontSize:14}}>{m.name}</div>
-                  <div style={{fontSize:11,color:"#9ca3af"}}>{m.total} tasks assigned</div>
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <div style={{fontSize:22,fontWeight:700,color:"#4f46e5"}}>{m.avg}%</div>
-                  <div style={{fontSize:10,color:"#9ca3af"}}>avg progress</div>
-                </div>
-              </div>
-              <Bar pct={m.avg} h={8}/>
-              <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
-                {tasks.filter(t=>t.member===m.name).map(t=>(
-                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-                    {dot(S_CLR[t.status])}
-                    <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</span>
-                    <span style={{fontSize:10,color:"#9ca3af",flexShrink:0}}>{t.division.split(" ")[0]}</span>
-                    <span style={{fontSize:11,color:"#9ca3af",width:28,flexShrink:0}}>{t.progress}%</span>
-                    <Btn variant="success" small onClick={()=>openCI(t)}>Update</Btn>
+          {memberRows.map(mRow => {
+            const m = mStats.find(x => x.name === mRow.name) || {name:mRow.name,total:0,blocked:0,completed:0,avg:0};
+            const isEditing = editMemberId === mRow.id;
+            return (
+              <Card key={mRow.id}>
+                {isEditing ? (
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13,marginBottom:10}}>Edit Member</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                      <Input label="Name" value={editMemberForm.name} onChange={v=>setEditMemberForm(f=>({...f,name:v}))} placeholder="Full name"/>
+                      <Input label="Email" type="email" value={editMemberForm.email} onChange={v=>setEditMemberForm(f=>({...f,email:v}))} placeholder="Email address"/>
+                    </div>
+                    <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                      <Btn variant="ghost" small onClick={()=>setEditMemberId(null)}>Cancel</Btn>
+                      <Btn small onClick={saveEditMember}>Save Changes</Btn>
+                    </div>
                   </div>
-                ))}
-                {tasks.filter(t=>t.member===m.name).length===0&&<div style={{fontSize:11,color:"#d1d5db"}}>No tasks assigned</div>}
-              </div>
-            </Card>
-          ))}
+                ) : (
+                  <>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div>
+                        <div style={{fontWeight:600,fontSize:14}}>{mRow.name}</div>
+                        <div style={{fontSize:11,color:"#9ca3af"}}>{m.total} tasks assigned</div>
+                        {mRow.email && <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>✉ {mRow.email}</div>}
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontSize:22,fontWeight:700,color:"#4f46e5"}}>{m.avg}%</div>
+                          <div style={{fontSize:10,color:"#9ca3af"}}>avg progress</div>
+                        </div>
+                        {isAdmin && (
+                          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                            <Btn variant="info" small onClick={()=>openEditMember(mRow)}>Edit</Btn>
+                            <Btn variant="danger" small onClick={async ()=>{
+                              try { await db.deleteMember(mRow.id); setMemberRows(r=>r.filter(x=>x.id!==mRow.id)); setMembers(ms=>ms.filter(x=>x!==mRow.name)); showToast("Member removed","warning"); }
+                              catch { showToast("Failed to remove member.","error"); }
+                            }}>Remove</Btn>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <Bar pct={m.avg} h={8}/>
+                    <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+                      {tasks.filter(t=>t.member===mRow.name).map(t=>(
+                        <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+                          {dot(S_CLR[t.status])}
+                          <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</span>
+                          <span style={{fontSize:10,color:"#9ca3af",flexShrink:0}}>{t.division.split(" ")[0]}</span>
+                          <span style={{fontSize:11,color:"#9ca3af",width:28,flexShrink:0}}>{t.progress}%</span>
+                          {(isAdmin || mRow.name === currentUser?.full_name) && <Btn variant="success" small onClick={()=>openCI(t)}>Update</Btn>}
+                        </div>
+                      ))}
+                      {tasks.filter(t=>t.member===mRow.name).length===0&&<div style={{fontSize:11,color:"#d1d5db"}}>No tasks assigned</div>}
+                    </div>
+                  </>
+                )}
+              </Card>
+            );
+          })}
         </>}
 
         {/* ── AI REPORT ── */}
-        {view==="ai" && (
+        {view==="ai" && eventId && (
           <Card>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
               <div style={{fontWeight:600,fontSize:14}}>🤖 AI Project Report</div>
@@ -878,6 +1103,74 @@ export default function App() {
             </Card>
           ))}
           {divisions.length===0 && <div style={{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:13}}>No divisions yet. Add one above.</div>}
+        </>}
+
+        {/* ── USERS (admin only) ── */}
+        {view==="users" && isAdmin && <>
+          <div style={{display:"flex",gap:8,marginBottom:16}}>
+            {["pending","all"].map(t=>(
+              <button key={t} onClick={()=>setUsersView(t)} style={{padding:"8px 18px",borderRadius:10,fontSize:13,fontWeight:500,border:"none",cursor:"pointer",
+                background:usersView===t?"#4f46e5":"#f3f4f6",color:usersView===t?"#fff":"#6b7280"}}>
+                {t==="pending"?"Pending Approval":"All Users"}
+                {t==="pending"&&pendingUsers.length>0&&<span style={{marginLeft:6,background:"#ef4444",color:"#fff",borderRadius:99,fontSize:10,padding:"1px 6px",fontWeight:700}}>{pendingUsers.length}</span>}
+              </button>
+            ))}
+          </div>
+
+          {usersView==="pending" && <>
+            {pendingUsers.length===0 ? (
+              <div style={{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:13}}>
+                <div style={{fontSize:32,marginBottom:8}}>✅</div>
+                No pending registrations.
+              </div>
+            ) : pendingUsers.map(u=>(
+              <Card key={u.id} style={{padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14}}>{u.full_name}</div>
+                    <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>@{u.username} · {u.email}</div>
+                    <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>Requested {new Date(u.created_at).toLocaleDateString()}</div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <Btn variant="success" onClick={()=>approveUser(u.id)}>✓ Approve</Btn>
+                    <Btn variant="danger"  onClick={()=>rejectUser(u.id)}>✗ Reject</Btn>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </>}
+
+          {usersView==="all" && <>
+            <div style={{fontSize:12,fontWeight:600,color:"#6b7280",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>
+              {appUsers.length} Registered User{appUsers.length!==1?"s":""}
+            </div>
+            {appUsers.map(u=>(
+              <Card key={u.id} style={{padding:"12px 16px",marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                      <span style={{fontWeight:600,fontSize:14}}>{u.full_name}</span>
+                      {pill(u.role==="admin"?"Admin":"Member", u.role==="admin"?"#e0e7ff":"#f0fdf4", u.role==="admin"?"#3730a3":"#15803d")}
+                    </div>
+                    <div style={{fontSize:12,color:"#6b7280"}}>@{u.username} · {u.email}</div>
+                  </div>
+                  <div>
+                    {pill(
+                      u.status==="approved"?"Approved":u.status==="rejected"?"Rejected":"Pending",
+                      u.status==="approved"?"#dcfce7":u.status==="rejected"?"#fee2e2":"#fef9c3",
+                      u.status==="approved"?"#15803d":u.status==="rejected"?"#dc2626":"#a16207"
+                    )}
+                    {u.status==="pending" && (
+                      <div style={{display:"flex",gap:6,marginTop:6}}>
+                        <Btn variant="success" small onClick={()=>approveUser(u.id)}>Approve</Btn>
+                        <Btn variant="danger"  small onClick={()=>rejectUser(u.id)}>Reject</Btn>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </>}
         </>}
 
         </>}
