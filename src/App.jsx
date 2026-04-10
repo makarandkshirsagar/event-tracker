@@ -101,7 +101,7 @@ const Input = ({label,value,onChange,placeholder,type="text",onKeyDown}) => (
   <div style={{marginBottom:12}}>
     {label&&<div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>}
     <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} onKeyDown={onKeyDown}
-      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff"}}/>
+      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:"#1f2937"}}/>
   </div>
 );
 
@@ -109,7 +109,7 @@ const Select = ({label,value,onChange,options}) => (
   <div style={{marginBottom:12}}>
     {label&&<div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>}
     <select value={value} onChange={e=>onChange(e.target.value)}
-      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",background:"#fff",boxSizing:"border-box"}}>
+      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",background:"#fff",boxSizing:"border-box",color:"#1f2937"}}>
       {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
     </select>
   </div>
@@ -119,7 +119,7 @@ const Textarea = ({label,value,onChange,placeholder,rows=2}) => (
   <div style={{marginBottom:12}}>
     {label&&<div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>}
     <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
-      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",resize:"vertical",boxSizing:"border-box",background:"#fff"}}/>
+      style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",resize:"vertical",boxSizing:"border-box",background:"#fff",color:"#1f2937"}}/>
   </div>
 );
 
@@ -784,7 +784,7 @@ export default function App() {
               <input value={newEvent} onChange={e=>setNewEvent(e.target.value)}
                 onKeyDown={e=>e.key==="Enter"&&createEvent()}
                 placeholder="Event name (e.g. Annual Gala 2025)..."
-                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none"}}/>
+                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",color:"#1f2937",background:"#fff"}}/>
               <Btn onClick={createEvent}>Create</Btn>
             </div>
           </Card>}
@@ -891,7 +891,7 @@ export default function App() {
           <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,alignItems:"center"}}>
             {[["fDiv",fDiv,setFDiv,["All",...divisions.map(d=>d.name)]],["fMember",fMember,setFMember,["All",...members]],["fStatus",fStatus,setFStatus,["All",...STATUSES]]].map(([k,val,set,opts])=>(
               <select key={k} value={val} onChange={e=>set(e.target.value)}
-                style={{border:"1px solid #e5e7eb",borderRadius:8,padding:"7px 10px",fontSize:12,background:"#fff",outline:"none"}}>
+                style={{border:"1px solid #e5e7eb",borderRadius:8,padding:"7px 10px",fontSize:12,background:"#fff",outline:"none",color:"#1f2937"}}>
                 {opts.map(o=><option key={o}>{o}</option>)}
               </select>
             ))}
@@ -961,7 +961,7 @@ export default function App() {
             <div style={{fontWeight:600,fontSize:13,marginBottom:10}}>Add Team Member</div>
             <div style={{display:"flex",gap:8,marginBottom:8}}>
               <select value={selectedUserId} onChange={e=>setSelectedUserId(e.target.value)}
-                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",background:"#fff"}}>
+                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",background:"#fff",color:"#1f2937"}}>
                 <option value="">— Select an approved user —</option>
                 {approvedUsers
                   .filter(u => !memberRows.some(m => m.name === u.full_name))
@@ -1074,14 +1074,14 @@ export default function App() {
               <div style={{width:64}}>
                 <div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Icon</div>
                 <input value={divForm.icon} onChange={e=>setDivForm(f=>({...f,icon:e.target.value}))}
-                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px",fontSize:20,textAlign:"center",outline:"none",boxSizing:"border-box"}}/>
+                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px",fontSize:20,textAlign:"center",outline:"none",boxSizing:"border-box",color:"#1f2937",background:"#fff"}}/>
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:11,fontWeight:600,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Division Name</div>
                 <input value={divForm.name} onChange={e=>setDivForm(f=>({...f,name:e.target.value}))}
                   onKeyDown={e=>e.key==="Enter"&&saveDivision()}
                   placeholder="e.g. Sponsorship"
-                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                  style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:13,outline:"none",boxSizing:"border-box",color:"#1f2937",background:"#fff"}}/>
               </div>
               <Btn onClick={saveDivision} disabled={!divForm.name.trim()}>{editDivId?"Save":"Add"}</Btn>
               {editDivId && <Btn variant="ghost" onClick={()=>{setEditDivId(null);setDivForm({name:"",icon:"📁"});}}>Cancel</Btn>}
